@@ -16,6 +16,8 @@
 import logging
 import re
 from functools import wraps
+from twisted.internet import defer
+
 
 logger = logging.getLogger(__name__)
 
@@ -307,3 +309,61 @@ def inject_active_span_byte_dict(headers, destination):
 
     for key, value in carrier.items():
         headers[key.encode()] = [value.encode()]
+
+
+def trace_defered_function(func):
+    @wraps(func)
+    @defer.inlineCallbacks
+    def f(self, *args, **kwargs):
+        # Start scope
+        TracerUtil.start_active_span(func.__name__)
+        try:
+            r = yield func(self, *args, **kwargs)
+        except:
+            raise
+        finally:
+            TracerUtil.close_active_span()
+        defer.returnValue(r)
+
+    return f
+
+
+def trace_defered_function_using_operation_name(name):
+    def trace_defered_function(func):
+        @wraps(func)
+        @defer.inlineCallbacks
+        def f(self, *args, **kwargs):
+            # Start scope
+            TracerUtil.start_active_span(name)
+            try:
+                r = yield func(self, *args, **kwargs)
+            except:
+                raise
+            finally:
+                TracerUtil.close_active_span()
+            defer.returnValue(r)
+
+        return f
+
+    return trace_defered_function
+
+
+def trace_function(func):
+    @wraps(func)
+    def f(self, *args, **kwargs):
+        TracerUtil.start_active_span(func.__name__)
+        result = func(self, *args, **kwargs)
+        TracerUtil.close_active_span()
+        return result
+
+    return f
+
+
+def tag_args(func):
+    @wraps(func)
+    def f(self, *args, **kwargs):
+        TracerUtil.set_tag("args", args)
+        TracerUtil.set_tag("kwargs", kwargs)
+        return func(self, *args, **kwargs)
+
+    return f
