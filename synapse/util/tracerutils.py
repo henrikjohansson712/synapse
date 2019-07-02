@@ -19,6 +19,8 @@ from functools import wraps
 from twisted.internet import defer
 import inspect
 
+logger = logging.getLogger(__name__)
+
 
 class _DumTagNames(object):
     """wrapper of opentracings tags. We need to have them if we
@@ -314,13 +316,13 @@ def trace_defered_function(func):
     @defer.inlineCallbacks
     def f(self, *args, **kwargs):
         # Start scope
-        TracerUtil.start_active_span(func.__name__)
+        start_active_span(func.__name__)
         try:
             r = yield func(self, *args, **kwargs)
         except:
             raise
         finally:
-            TracerUtil.close_active_span()
+            close_active_span()
         defer.returnValue(r)
 
     return f
@@ -332,13 +334,13 @@ def trace_defered_function_using_operation_name(name):
         @defer.inlineCallbacks
         def f(self, *args, **kwargs):
             # Start scope
-            TracerUtil.start_active_span(name)
+            start_active_span(name)
             try:
                 r = yield func(self, *args, **kwargs)
             except:
                 raise
             finally:
-                TracerUtil.close_active_span()
+                close_active_span()
             defer.returnValue(r)
 
         return f
@@ -349,11 +351,11 @@ def trace_defered_function_using_operation_name(name):
 def trace_function(func):
     @wraps(func)
     def f(self, *args, **kwargs):
-        TracerUtil.start_active_span(func.__name__)
+        start_active_span(func.__name__)
         try:
             return func(self, *args, **kwargs)
         finally:
-            TracerUtil.close_active_span()
+            close_active_span()
 
     return f
 
@@ -361,8 +363,8 @@ def trace_function(func):
 def tag_args(func):
     @wraps(func)
     def f(self, *args, **kwargs):
-        TracerUtil.set_tag("args", args)
-        TracerUtil.set_tag("kwargs", kwargs)
+        set_tag("args", args)
+        set_tag("kwargs", kwargs)
         return func(self, *args, **kwargs)
 
     return f
@@ -373,14 +375,14 @@ def wrap_in_span(func):
     which is a complete break from the current logcontext. This function creates
     a non active span from the current context and closes it after the function
     executes."""
-
+    global _opentracing
     # I haven't use this function yet
 
-    if not TracerUtil._opentracing:
+    if not _opentracing:
         return func
 
-    span = TracerUtil._opentracing.tracer.start_span(
-        func.__name__, child_of=TracerUtil._opentracing.tracer.active_span
+    span = _opentracing.tracer.start_span(
+        func.__name__, child_of=_opentracing.tracer.active_span
     )
 
     @wraps(func)
