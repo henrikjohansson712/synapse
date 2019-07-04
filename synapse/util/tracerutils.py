@@ -456,7 +456,7 @@ def wrap_in_span(func):
 from synapse.util.logcontext import LoggingContext
 
 
-def trace_servlet(func):
+def trace_servlet(servlet_name, func):
     """Decorator to trace a servlet"""
     if not opentracing:
         return func
@@ -473,6 +473,7 @@ def trace_servlet(func):
                 tags.HTTP_METHOD: request.get_method(),
                 tags.HTTP_URL: request.get_redacted_uri(),
                 tags.PEER_HOST_IPV6: request.getClientIP(),
+                "servlet_name": servlet_name,
             },
         )
         # A context manager would be the most logical here but defer.returnValue
