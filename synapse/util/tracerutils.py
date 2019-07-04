@@ -453,9 +453,6 @@ def wrap_in_span(func):
     return f
 
 
-from synapse.util.logcontext import LoggingContext
-
-
 def trace_servlet(servlet_name, func):
     """Decorator to trace a servlet"""
     if not opentracing:
