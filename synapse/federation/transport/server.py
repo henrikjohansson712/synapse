@@ -290,7 +290,7 @@ class BaseFederationServlet(object):
                 raise
 
             # Start an opentracing span
-            tracerutils.start_active_span_from_context(
+            with tracerutils.start_active_span_from_context(
                 request.requestHeaders,
                 "incoming-request",
                 tags={
@@ -302,9 +302,7 @@ class BaseFederationServlet(object):
                     "authenticated_entity": origin,
                     "servlet_name": request.request_metrics.name,
                 },
-            )
-
-            try:
+            ):
                 if origin:
                     with ratelimiter.ratelimit(origin) as d:
                         yield d
@@ -315,9 +313,6 @@ class BaseFederationServlet(object):
                     response = yield func(
                         origin, content, request.args, *args, **kwargs
                     )
-            finally:
-                # Finish the span
-                tracerutils.close_active_span()
 
             defer.returnValue(response)
 

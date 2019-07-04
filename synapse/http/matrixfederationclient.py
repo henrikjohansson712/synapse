@@ -341,7 +341,7 @@ class MatrixFederationHttpClient(object):
             query_bytes = b""
 
         # Retreive current span
-        tracerutils.start_active_span(
+        scope = tracerutils.start_active_span(
             "outgoing-federation-request",
             tags={
                 tracerutils.tags.SPAN_KIND: tracerutils.tags.SPAN_KIND_RPC_CLIENT,
@@ -358,7 +358,7 @@ class MatrixFederationHttpClient(object):
 
         headers_dict[b"User-Agent"] = [self.version_string_bytes]
 
-        with limiter:
+        with limiter, scope:
             # XXX: Would be much nicer to retry only at the transaction-layer
             # (once we have reliable transactions in place)
             if long_retries:
@@ -520,7 +520,6 @@ class MatrixFederationHttpClient(object):
                         _flatten_response_never_received(e),
                     )
                     raise
-        tracerutils.close_active_span()
         defer.returnValue(response)
 
     def build_auth_headers(
