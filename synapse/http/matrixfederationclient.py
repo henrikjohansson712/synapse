@@ -36,9 +36,9 @@ from twisted.internet.task import _EPSILON, Cooperator
 from twisted.web._newclient import ResponseDone
 from twisted.web.http_headers import Headers
 
+import synapse.logging.opentracing as opentracing
 import synapse.metrics
 import synapse.util.retryutils
-import synapse.util.tracerutils as tracerutils
 from synapse.api.errors import (
     Codes,
     FederationDeniedError,
@@ -341,20 +341,20 @@ class MatrixFederationHttpClient(object):
             query_bytes = b""
 
         # Retreive current span
-        scope = tracerutils.start_active_span(
+        scope = opentracing.start_active_span(
             "outgoing-federation-request",
             tags={
-                tracerutils.tags.SPAN_KIND: tracerutils.tags.SPAN_KIND_RPC_CLIENT,
-                tracerutils.tags.PEER_ADDRESS: request.destination,
-                tracerutils.tags.HTTP_METHOD: request.method,
-                tracerutils.tags.HTTP_URL: request.path,
+                opentracing.tags.SPAN_KIND: opentracing.tags.SPAN_KIND_RPC_CLIENT,
+                opentracing.tags.PEER_ADDRESS: request.destination,
+                opentracing.tags.HTTP_METHOD: request.method,
+                opentracing.tags.HTTP_URL: request.path,
             },
             finish_on_close=True,
         )
 
         # Inject the span into the headers
         headers_dict = {}
-        tracerutils.inject_active_span_byte_dict(headers_dict, request.destination)
+        opentracing.inject_active_span_byte_dict(headers_dict, request.destination)
 
         headers_dict[b"User-Agent"] = [self.version_string_bytes]
 
@@ -436,8 +436,8 @@ class MatrixFederationHttpClient(object):
                         response.phrase.decode("ascii", errors="replace"),
                     )
 
-                    tracerutils.set_tag(
-                        tracerutils.tags.HTTP_STATUS_CODE, response.code
+                    opentracing.set_tag(
+                        opentracing.tags.HTTP_STATUS_CODE, response.code
                     )
 
                     if 200 <= response.code < 300:
