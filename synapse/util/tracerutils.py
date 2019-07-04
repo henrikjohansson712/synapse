@@ -13,11 +13,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.import opentracing
 
+try:
+    import opentracing
+except ImportError:
+    opentracing = None
+try:
+    from jaeger_client import Config as JaegerConfig
+    from synapse.util.scopecontextmanager import LogContextScopeManager
+except ImportError:
+    JaegerConfig = None
+    LogContextScopeManager = None
+
+import contextlib
 import logging
 import re
 from functools import wraps
 from twisted.internet import defer
 import inspect
+
+from twisted.internet import defer
 
 logger = logging.getLogger(__name__)
 
@@ -60,15 +74,13 @@ def only_if_tracing(func):
 
     @wraps(func)
     def f(*args, **kwargs):
-        if _opentracing:
+        if opentracing:
             return func(*args, **kwargs)
         else:
             return
 
     return f
 
-
-_opentracing = None
 
 # Block everything by default
 _homeserver_whitelist = None
@@ -81,43 +93,30 @@ def init_tracer(config):
 
     Args:
         config (Config)
-        The config used by the homserver. Here it's used to set the service
+        The config used by the homeserver. Here it's used to set the service
         name to the homeserver's.
     """
+    global opentracing
     if not config.tracer_config.get("tracer_enabled", False):
         # We don't have a tracer
+        opentracing = None
         return
 
-    import_opentracing()
+    if not opentracing:
+        logger.error(
+            "The server has been configure to use opentracing but opentracing is not installed."
+        )
+        raise ModuleNotFoundError("opentracing")
+
     setup_tags()
     setup_tracing(config)
 
 
-def import_opentracing():
-    global _opentracing
-    try:
-        # Try to import the tracer. If it's not there we want to throw an eror
-        import opentracing
-    except ImportError as e:
-        logger.error(
-            "The server has been configure to use opentracing but "
-            "the {} module has not been installed.".format(e.name)
-        )
-        raise
-
-    _opentracing = opentracing
-
-
 def setup_tracing(config):
-    try:
-        from jaeger_client import Config as JaegerConfig
-        from synapse.util.scopecontextmanager import LogContextScopeManager
-    except ImportError as e:
+    if not JaegerConfig:
         logger.error(
-            "The server has been configure to use opentracing but "
-            "the {} module has not been installed.".format(e.name)
+            "The server has been configure to use opentracing but opentracing is not installed."
         )
-        raise
 
     # Include the worker name
     name = config.worker_name if config.worker_name else "master"
@@ -133,12 +132,18 @@ def setup_tracing(config):
 
 @only_if_tracing
 def setup_tags():
-    global tags, _opentracing
-    tags = _opentracing.tags
+    """Replaces the dummy tags with opentracing ones if possible"""
+    global tags
+    tags = opentracing.tags
+
+
+@contextlib.contextmanager
+def _noop_context_manager(*args, **kwargs):
+    """Does exactly what it says on the tin"""
+    yield
 
 
 # Could use kwargs but I want these to be explicit
-@only_if_tracing
 def start_active_span(
     operation_name,
     child_of=None,
@@ -148,31 +153,46 @@ def start_active_span(
     ignore_active_span=False,
     finish_on_close=True,
 ):
-    # We need to enter the scope here for the logcontext to become active
-    _opentracing.tracer.start_active_span(
-        operation_name,
-        child_of=child_of,
-        references=references,
-        tags=tags,
-        start_time=start_time,
-        ignore_active_span=ignore_active_span,
-        finish_on_close=finish_on_close,
-    ).__enter__()
+    """Starts an active opentracing span. Note, the scope doesn't become active
+    until it has been entered, however, the span starts from the time this
+    message is called.
+    Args:
+        See opentracing.tracer
+    Returns:
+        scope (Scope) or noop_context_manager
+    """
+    if opentracing is None:
+        return _noop_context_manager()
+    else:
+        # We need to enter the scope here for the logcontext to become active
+        return opentracing.tracer.start_active_span(
+            operation_name,
+            child_of=child_of,
+            references=references,
+            tags=tags,
+            start_time=start_time,
+            ignore_active_span=ignore_active_span,
+            finish_on_close=finish_on_close,
+        )
 
 
 @only_if_tracing
 def close_active_span():
-    _opentracing.tracer.scope_manager.active.__exit__(None, None, None)
+    """Closes the active span. This will close it's logcontext if the context
+    was made for the span"""
+    opentracing.tracer.scope_manager.active.__exit__(None, None, None)
 
 
 @only_if_tracing
 def set_tag(key, value):
-    _opentracing.tracer.active_span.set_tag(key, value)
+    """Set's a tag on the active span"""
+    opentracing.tracer.active_span.set_tag(key, value)
 
 
 @only_if_tracing
 def log_kv(key_values, timestamp=None):
-    _opentracing.tracer.active_span.log_kv(key_values, timestamp)
+    """Log to the active span"""
+    opentracing.tracer.active_span.log_kv(key_values, timestamp)
 
 
 # Note: we don't have a get baggage items because we're trying to hide all
@@ -180,17 +200,19 @@ def log_kv(key_values, timestamp=None):
 # as a result
 @only_if_tracing
 def set_baggage_item(key, value):
-    _opentracing.tracer.active_span.set_baggage_item(key, value)
+    """Attach baggage to the active span"""
+    opentracing.tracer.active_span.set_baggage_item(key, value)
 
 
 @only_if_tracing
 def set_operation_name(operation_name):
-    _opentracing.tracer.active_span.set_operation_name(operation_name)
+    """Sets the operation name of the active span"""
+    opentracing.tracer.active_span.set_operation_name(operation_name)
 
 
 @only_if_tracing
 def set_homeserver_whitelist(homeserver_whitelist):
-    """Sets the whitelist
+    """Sets the homeserver whitelist
 
     Args:
         homeserver_whitelist (iterable of strings): regex of whitelisted homeservers
@@ -205,13 +227,16 @@ def set_homeserver_whitelist(homeserver_whitelist):
 
 @only_if_tracing
 def whitelisted_homeserver(destination):
+    """Checks if a destination matches the whitelist
+
+    Args:
+        destination (String)"""
     global _homeserver_whitelist
     if _homeserver_whitelist:
         return _homeserver_whitelist.match(destination)
     return False
 
 
-@only_if_tracing
 def start_active_span_from_context(
     headers,
     operation_name,
@@ -222,20 +247,23 @@ def start_active_span_from_context(
     finish_on_close=True,
 ):
     """
-    Extracts a span context from Twisted Headers.
-    args:
+    Extracts a span context from Twisted Headers and uses it to construct a new span
+
+    Args:
         headers (twisted.web.http_headers.Headers)
-    returns:
+    Returns:
         span_context (opentracing.span.SpanContext)
     """
-    global _opentracing
+    if opentracing is None:
+        return _noop_context_manager()
+
     # Twisted encodes the values as lists whereas opentracing doesn't.
     # So, we take the first item in the list.
     # Also, twisted uses byte arrays while opentracing expects strings.
     header_dict = {k.decode(): v[0].decode() for k, v in headers.getAllRawHeaders()}
-    context = _opentracing.tracer.extract(_opentracing.Format.HTTP_HEADERS, header_dict)
+    context = opentracing.tracer.extract(opentracing.Format.HTTP_HEADERS, header_dict)
 
-    _opentracing.tracer.start_active_span(
+    return opentracing.tracer.start_active_span(
         operation_name,
         child_of=context,
         references=references,
@@ -249,14 +277,14 @@ def start_active_span_from_context(
 @only_if_tracing
 def inject_active_span_twisted_headers(headers, destination):
     """
-    Injects a span context into twisted headers inplace
+    Injects a span context into twisted headers in-place
 
     Args:
         headers (twisted.web.http_headers.Headers)
         span (opentracing.Span)
 
     Returns:
-        Inplace modification of headers
+        In-place modification of headers
 
     Note:
         The headers set by the tracer are custom to the tracer implementation which
@@ -265,14 +293,13 @@ def inject_active_span_twisted_headers(headers, destination):
         here:
         https://github.com/jaegertracing/jaeger-client-python/blob/master/jaeger_client/constants.py
     """
-    global _opentracing
 
     if not whitelisted_homeserver(destination):
         return
 
-    span = _opentracing.tracer.active_span
+    span = opentracing.tracer.active_span
     carrier = {}
-    _opentracing.tracer.inject(span, _opentracing.Format.HTTP_HEADERS, carrier)
+    opentracing.tracer.inject(span, opentracing.Format.HTTP_HEADERS, carrier)
 
     for key, value in carrier.items():
         headers.addRawHeaders(key, value)
@@ -289,7 +316,7 @@ def inject_active_span_byte_dict(headers, destination):
         span (opentracing.Span)
 
     Returns:
-        Inplace modification of headers
+        In-place modification of headers
 
     Note:
         The headers set by the tracer are custom to the tracer implementation which
@@ -298,37 +325,46 @@ def inject_active_span_byte_dict(headers, destination):
         here:
         https://github.com/jaegertracing/jaeger-client-python/blob/master/jaeger_client/constants.py
     """
-    global _opentracing
     if not whitelisted_homeserver(destination):
         return
 
-    span = _opentracing.tracer.active_span
+    span = opentracing.tracer.active_span
 
     carrier = {}
-    _opentracing.tracer.inject(span, _opentracing.Format.HTTP_HEADERS, carrier)
+    opentracing.tracer.inject(span, opentracing.Format.HTTP_HEADERS, carrier)
 
     for key, value in carrier.items():
         headers[key.encode()] = [value.encode()]
 
 
 def trace_defered_function(func):
+    """Decorator to trace a defered function. Sets the operation name to that of the
+    function's."""
+
     @wraps(func)
     @defer.inlineCallbacks
     def f(self, *args, **kwargs):
         # Start scope
-        start_active_span(func.__name__)
+        # A context manager would be the most logical here but defer.returnValue
+        # raises an exception in order to provide the return value. This causes
+        # opentracing to mark each request as erroring, in order to avoid this we
+        # need to give the finally clause explicitly.
+        scope = start_active_span(func.__name__)
+        scope.__enter__()
         try:
             r = yield func(self, *args, **kwargs)
         except:
             raise
         finally:
-            close_active_span()
+            scope.__exit__(None, None, None)
         defer.returnValue(r)
 
     return f
 
 
 def trace_defered_function_using_operation_name(name):
+    """Decorator to trace a defered function. Explicitely sets the operation_name to name"""
+
     def trace_defered_function(func):
         @wraps(func)
         @defer.inlineCallbacks
@@ -349,18 +385,35 @@ def trace_defered_function_using_operation_name(name):
 
 
 def trace_function(func):
+    """Decorator to trace a normal function. Sets the operation name to that of the
+    function's."""
+
     @wraps(func)
     def f(self, *args, **kwargs):
-        start_active_span(func.__name__)
-        try:
+        with start_active_span(func.__name__):
             return func(self, *args, **kwargs)
-        finally:
-            close_active_span()
 
     return f
 
 
+def trace_function_using_operation_name(operation_name):
+    """Decorator to trace a function. Explicitely sets the operation_name to name"""
+
+    def trace_function(func):
+        @wraps(func)
+        def f(self, *args, **kwargs):
+            with start_active_span(operation_name):
+                return func(self, *args, **kwargs)
+
+        return f
+
+    return trace_function
+
+
 def tag_args(func):
+    """Decorator that tags all of the arguments of the function.
+    This is a useful debugging util"""
+
     @wraps(func)
     def f(self, *args, **kwargs):
         set_tag("args", args)
@@ -370,19 +423,20 @@ def tag_args(func):
     return f
 
 
+@only_if_tracing
 def wrap_in_span(func):
     """Its purpose is to wrap a function that is being passed into a context
     which is a complete break from the current logcontext. This function creates
     a non active span from the current context and closes it after the function
     executes."""
-    global _opentracing
+    global opentracing
     # I haven't use this function yet
 
-    if not _opentracing:
+    if not opentracing:
         return func
 
-    span = _opentracing.tracer.start_span(
-        func.__name__, child_of=_opentracing.tracer.active_span
+    span = opentracing.tracer.start_span(
+        func.__name__, child_of=opentracing.tracer.active_span
     )
 
     @wraps(func)
@@ -395,5 +449,41 @@ def wrap_in_span(func):
             raise
         finally:
             span.finish()
+
+    return f
+
+
+from synapse.util.logcontext import LoggingContext
+
+
+def trace_servlet(func):
+    """Decorator to trace a servlet"""
+    if not opentracing:
+        return func
+
+    @wraps(func)
+    @defer.inlineCallbacks
+    def f(request, *args, **kwargs):
+        scope = start_active_span_from_context(
+            request.requestHeaders,
+            "incoming-client-request",
+            tags={
+                "request_id": request.get_request_id(),
+                tags.SPAN_KIND: tags.SPAN_KIND_RPC_SERVER,
+                tags.HTTP_METHOD: request.get_method(),
+                tags.HTTP_URL: request.get_redacted_uri(),
+                tags.PEER_HOST_IPV6: request.getClientIP(),
+            },
+        )
+        # A context manager would be the most logical here but defer.returnValue
+        # raises an exception in order to provide the return value. This causes
+        # opentracing to mark each request as erroring, in order to avoid this we
+        # need to give the finally clause explicitly.
+        scope.__enter__()
+        try:
+            result = yield defer.maybeDeferred(func, request, *args, **kwargs)
+        finally:
+            scope.__exit__(None, None, None)
+        defer.returnValue(result)
 
     return f
