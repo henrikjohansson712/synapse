@@ -344,20 +344,9 @@ def trace_defered_function(func):
     @wraps(func)
     @defer.inlineCallbacks
     def f(self, *args, **kwargs):
-        # Start scope
-        # A context manager would be the most logical here but defer.returnValue
-        # raises an exception in order to provide the return value. This causes
-        # opentracing to mark each request as erroring, in order to avoid this we
-        # need to give the finally clause explicitly.
-        scope = start_active_span(func.__name__)
-        scope.__enter__()
-        try:
+        with start_active_span(func.__name__):
             r = yield func(self, *args, **kwargs)
-        except:
-            raise
-        finally:
-            scope.__exit__(None, None, None)
-        defer.returnValue(r)
+            defer.returnValue(r)
 
     return f
 
@@ -370,14 +359,9 @@ def trace_defered_function_using_operation_name(name):
         @defer.inlineCallbacks
         def f(self, *args, **kwargs):
             # Start scope
-            start_active_span(name)
-            try:
+            with start_active_span(name):
                 r = yield func(self, *args, **kwargs)
-            except:
-                raise
-            finally:
-                close_active_span()
-            defer.returnValue(r)
+                defer.returnValue(r)
 
         return f
 
@@ -435,12 +419,11 @@ def wrap_in_span(func):
     if not opentracing:
         return func
 
-    span = opentracing.tracer.start_span(
-        func.__name__, child_of=opentracing.tracer.active_span
-    )
+    parent_span = opentracing.tracer.active_span
 
     @wraps(func)
     def f(self, *args, **kwargs):
+        span = opentracing.tracer.start_span(func.__name__, child_of=parent_span)
         try:
             return func(self, *args, **kwargs)
         except Exception as e:
