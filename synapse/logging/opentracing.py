@@ -461,7 +461,7 @@ def trace_servlet(servlet_name, func):
     @wraps(func)
     @defer.inlineCallbacks
     def f(request, *args, **kwargs):
-        scope = start_active_span_from_context(
+        with start_active_span_from_context(
             request.requestHeaders,
             "incoming-client-request",
             tags={
@@ -472,16 +472,8 @@ def trace_servlet(servlet_name, func):
                 tags.PEER_HOST_IPV6: request.getClientIP(),
                 "servlet_name": servlet_name,
             },
-        )
-        # A context manager would be the most logical here but defer.returnValue
-        # raises an exception in order to provide the return value. This causes
-        # opentracing to mark each request as erroring, in order to avoid this we
-        # need to give the finally clause explicitly.
-        scope.__enter__()
-        try:
+        ):
             result = yield defer.maybeDeferred(func, request, *args, **kwargs)
-        finally:
-            scope.__exit__(None, None, None)
-        defer.returnValue(result)
+            defer.returnValue(result)
 
     return f
