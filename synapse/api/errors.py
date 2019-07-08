@@ -218,6 +218,18 @@ class AuthError(SynapseError):
         super(AuthError, self).__init__(*args, **kwargs)
 
 
+class InvalidClientCredentialsError(SynapseError):
+    """An error raised when there was a problem authorising a client request."""
+
+    def __init__(self, msg, errcode):
+        # https://matrix.org/docs/spec/client_server/r0.5.0#using-access-tokens:
+        #
+        # When credentials are required but missing or invalid, the HTTP call will
+        # return with a status of 401 and the error code, M_MISSING_TOKEN or
+        # M_UNKNOWN_TOKEN respectively.
+        super().__init__(code=401, msg=msg, errcode=errcode)
+
+
 class ResourceLimitError(SynapseError):
     """
     Any error raised when there is a problem with resource usage.

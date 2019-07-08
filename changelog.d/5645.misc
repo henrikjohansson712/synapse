@@ -1,0 +1,1 @@
+Get rid of unused TOKEN_NOT_FOUND_HTTP_STATUS field as a precursor to implementing client session expiry.
